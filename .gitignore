@@ -1,0 +1,7 @@
+.env
+.qodo
+__pycache__
+venv
+data
+store.csv
+train.csv
