@@ -22,21 +22,21 @@ ollama_cloud_headers = {
 # LLM 設定
 # =========================
 llm_reasoner = ChatOllama(
-    model="deepseek-v3.1:671b-cloud",   # 記得要加 :cloud 或是完整 tag
+    model="deepseek-v3.1:671b-cloud",
     base_url="https://ollama.com",
-    headers=ollama_cloud_headers,       # 傳送驗證資訊
-    temperature=0.1,
-    keep_alive="30m"
+    headers=ollama_cloud_headers,
+    temperature=0.0,
+    keep_alive="15m"
 )
 llm_coder = ChatOllama(
     model="qwen3-coder:480b-cloud",
     base_url="https://ollama.com",
     headers=ollama_cloud_headers,
-    temperature=0.1
+    temperature=0.0
 )
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
-MAX_ITERATIONS = 10
+MAX_ITERATIONS = 20
 
 # =========================
 # State 定義（加強 reward / memory）
@@ -225,25 +225,29 @@ Design Spec:
    - This filtering MUST happen **BEFORE** any train/validation/time-series split.
    - Example:
        df = df[(df['Sales'] > 0) & (df['Open'] == 1)]
-
-2. HARDWARE ACCELERATION (IMPORTANT):
+2. DATA TYPE FIX (CRITICAL FOR ROSSMANN):
+       - The column 'StateHoliday' often contains mixed types (integers and strings).
+       - You MUST convert it to string BEFORE encoding.
+       - Code example:
+           df['StateHoliday'] = df['StateHoliday'].astype(str)
+3. HARDWARE ACCELERATION (IMPORTANT):
    - Detect if a GPU is available (e.g., check CUDA).
    - If using XGBoost:
-       - Set `tree_method='gpu_hist'` when GPU is available, otherwise `tree_method='hist'`.
+       - Set `tree_method='hist'`.
    - If using LightGBM:
        - Set `device='gpu'` when GPU is available, otherwise `device='cpu'`.
    - This is crucial for training speed on this dataset.
 
-3. DATA LEAKAGE PREVENTION:
+4. DATA LEAKAGE PREVENTION:
    - When preprocessing (scaling/encoding), fit transformers ONLY on the training set.
    - Apply the fitted transformers to the validation set.
    - Do NOT use any statistics from the validation set to transform the training data.
 
-4. DATA USAGE:
+5. DATA USAGE:
    - Use 'train.csv' and 'store.csv' files located in the current working directory.
    - Correctly parse dates and use them for feature engineering (e.g. extracting year, month, day-of-week).
 
-5. MAPE IMPLEMENTATION (CRITICAL, TO AVOID INF):
+6. MAPE IMPLEMENTATION (CRITICAL, TO AVOID INF):
    - Implement MAPE in a numerically safe way that does NOT produce 'inf' even if some targets are zero.
    - One acceptable pattern is:
 
@@ -262,7 +266,7 @@ Design Spec:
 
        print(f"FINAL_MAPE: {{final_mape}}")
 
-6. OUTPUT & PLOTTING:
+7. OUTPUT & PLOTTING:
    - If you generate plots, call `import matplotlib.pyplot as plt` and use `plt.switch_backend('Agg')` at the top to avoid GUI issues.
    - You may optionally save a few key plots (e.g. feature importance) to disk.
 
@@ -392,7 +396,7 @@ def refinement_node(state: AgentState):
     history = state["history"] + [new_log]
 
     # 3. 判斷是否終止（iteration 或連續未改善輪數）
-    if current_iteration >= MAX_ITERATIONS or no_improve_rounds >= 3:
+    if current_iteration >= MAX_ITERATIONS:
         print(f">> Stopping criteria reached. Iterations={current_iteration}, no_improve_rounds={no_improve_rounds}")
         return {
             "iteration_count": current_iteration,
@@ -415,8 +419,8 @@ def refinement_node(state: AgentState):
         ]
     )
 
-    # 擴大 Log Context 到 2000 字元，以免漏掉 traceback
-    log_snippet = output[-2000:]
+    # 擴大 Log Context 到 5000 字元，以免漏掉 traceback
+    log_snippet = output[-5000:]
 
     plan_prompt = f"""
 You are the Planner Agent of an automated ML system for Rossmann Sales forecasting.
@@ -474,10 +478,21 @@ Output strictly in JSON:
     history[-1]["strategy"] = plan_data["strategy"]
     history[-1]["citation"] = plan_data["citation"]
     history[-1]["reasoning"] = plan_data["reasoning"]
+    try:
+        log_path = os.path.join("logs", f"iter_{current_iteration}.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write("\n\n" + "="*40 + "\n")
+            f.write("=== [Planner Agent] Refinement Strategy ===\n")
+            f.write("="*40 + "\n")
+            f.write(f"Status:    {execution_status}\n")
+            f.write(f"Component: {plan_data['component']}\n")
+            f.write(f"Strategy:  {plan_data['strategy']}\n")
+            f.write(f"Citation:  {plan_data['citation']}\n")
+            f.write(f"Reasoning: {plan_data['reasoning']}\n")
+            f.write("="*40 + "\n")
+    except Exception as e:
+        print(f"Warning: Failed to append plan to log: {e}")
 
-    # ============================================================
-    # Coder Agent
-    # ============================================================
     print(">> Implementing Plan...")
 
     code_prompt = f"""
@@ -497,7 +512,7 @@ REASON: {plan_data['reasoning']}
 - Ensure the line `df = df[(df['Sales'] > 0) & (df['Open'] == 1)]`
   (or an equivalent boolean mask) exists **exactly once** and is executed
   **before any train/validation split**. Do NOT move or remove this filtering.
-- Ensure GPU-related parameters (e.g., `tree_method='gpu_hist'` for XGBoost,
+- Ensure GPU-related parameters (e.g., `tree_method='hist'` for XGBoost,
   `device='gpu'` for LightGBM) are preserved if they were previously set.
 - Ensure the MAPE implementation is numerically stable and does NOT produce 'inf'
   even if some targets are zero (e.g., use a safe denominator like `y_true_safe = np.where(y_true == 0, 1, y_true)`).

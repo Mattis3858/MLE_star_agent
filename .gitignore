@@ -5,3 +5,4 @@ venv
 data
 store.csv
 train.csv
+catboost_info

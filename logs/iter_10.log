@@ -1,34 +1,16 @@
 === Global Citations from Research Agent ===
 - Google ML Sales Forecasting Agent (arxiv:2506.15692)
-- MLE-STAR: Machine Learning Engineering Agent via Search and Targeted Refinement
-- Anton Lebedevich's Top 10% Kaggle Solution (glmnet + xgboost ensemble)
-- Gert Jacobusse's 1st Place Winning Solution (multi-model xgboost ensemble)
-- NVTabular for Rossmann Data Preprocessing and Feature Engineering
+- Rossmann Store Sales Prediction (Top 100 Kaggle Solution)
+- Kaggle Winning Solution: Retail Sales Forecasting (YanAITalk)
+- Data Science Portfolio: Rossmann Sales Forecasting (Random Forest & Feature Engineering)
+- ETL and Feature Engineering with NVTabular for Rossmann Data
 
 === Raw Execution Output ===
-Training stacking ensemble...
-[LightGBM] [Info] This is the GPU trainer!!
-[LightGBM] [Info] Total Bins 1665
-[LightGBM] [Info] Number of data points in the train set: 804056, number of used features: 36
-[LightGBM] [Info] Using GPU Device: NVIDIA GeForce RTX 3050 Laptop GPU, Vendor: NVIDIA Corporation
-[LightGBM] [Info] Compiling OpenCL Kernel with 256 bins...
-[LightGBM] [Info] GPU programs have been built
-[LightGBM] [Info] Size of histogram bin entry: 8
-[LightGBM] [Info] 20 dense feature groups (15.34 MB) transferred to GPU in 0.023810 secs. 1 sparse feature groups
-[LightGBM] [Info] Start training from score 6954.822954
-Stacking ensemble MAPE: 9.7086
-Training weighted averaging ensemble...
-[LightGBM] [Info] This is the GPU trainer!!
-[LightGBM] [Info] Total Bins 1665
-[LightGBM] [Info] Number of data points in the train set: 804056, number of used features: 36
-[LightGBM] [Info] Using GPU Device: NVIDIA GeForce RTX 3050 Laptop GPU, Vendor: NVIDIA Corporation
-[LightGBM] [Info] Compiling OpenCL Kernel with 256 bins...
-[LightGBM] [Info] GPU programs have been built
-[LightGBM] [Info] Size of histogram bin entry: 8
-[LightGBM] [Info] 20 dense feature groups (15.34 MB) transferred to GPU in 0.022178 secs. 1 sparse feature groups
-[LightGBM] [Info] Start training from score 6954.822954
-Weighted averaging ensemble MAPE: 10.3621
-Model weights: {'xgb': np.float64(0.5896553744463573), 'lgbm': np.float64(0.41034462555364276)}
-Selected stacking ensemble as best method
-FINAL_MAPE: 9.708640454723392
+stacking_ensemble MAPE: 17.4436
+lightgbm MAPE: 23.6746
+xgboost MAPE: 19.5155
+catboost MAPE: 26.0771
+random_forest MAPE: 28.6647
+weighted_ensemble MAPE: 17.9132
+FINAL_MAPE: 17.44364018010177
 
