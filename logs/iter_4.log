@@ -1,0 +1,16 @@
+=== Global Citations from Research Agent ===
+- Google ML Sales Forecasting Agent (arxiv:2506.15692)
+- MLE-STAR: Machine Learning Engineering Agent via Search and Targeted Refinement
+- Anton Lebedevich's Top 10% Kaggle Solution (glmnet + xgboost ensemble)
+- Gert Jacobusse's 1st Place Winning Solution (multi-model xgboost ensemble)
+- NVTabular for Rossmann Data Preprocessing and Feature Engineering
+
+=== Raw Execution Output ===
+Training xgb...
+xgb MAPE: 9.4959
+Training lgbm...
+lgbm MAPE: 12.6268
+
+Best model: xgb with MAPE: 9.4959
+FINAL_MAPE: 9.495876631918577
+

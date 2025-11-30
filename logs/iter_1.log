@@ -1,0 +1,13 @@
+=== Global Citations from Research Agent ===
+- Google ML Sales Forecasting Agent (arxiv:2506.15692)
+- MLE-STAR: Machine Learning Engineering Agent via Search and Targeted Refinement
+- Anton Lebedevich's Top 10% Kaggle Solution (glmnet + xgboost ensemble)
+- Gert Jacobusse's 1st Place Winning Solution (multi-model xgboost ensemble)
+- NVTabular for Rossmann Data Preprocessing and Feature Engineering
+
+=== Raw Execution Output ===
+
+Traceback (most recent call last):
+  File "C:\Users\Mattis\Desktop\VSCode\AI agent\train_iter_1.py", line 11, in <module>
+    from catboost import CatBoostRegressor
+ModuleNotFoundError: No module named 'catboost'

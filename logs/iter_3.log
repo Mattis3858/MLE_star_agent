@@ -1,0 +1,25 @@
+=== Global Citations from Research Agent ===
+- Google ML Sales Forecasting Agent (arxiv:2506.15692)
+- MLE-STAR: Machine Learning Engineering Agent via Search and Targeted Refinement
+- Anton Lebedevich's Top 10% Kaggle Solution (glmnet + xgboost ensemble)
+- Gert Jacobusse's 1st Place Winning Solution (multi-model xgboost ensemble)
+- NVTabular for Rossmann Data Preprocessing and Feature Engineering
+
+=== Raw Execution Output ===
+Training xgb...
+xgb MAPE: 9.4959
+Training lgbm...
+[LightGBM] [Info] This is the GPU trainer!!
+[LightGBM] [Info] Total Bins 1665
+[LightGBM] [Info] Number of data points in the train set: 804056, number of used features: 36
+[LightGBM] [Info] Using GPU Device: NVIDIA GeForce RTX 3050 Laptop GPU, Vendor: NVIDIA Corporation
+[LightGBM] [Info] Compiling OpenCL Kernel with 256 bins...
+[LightGBM] [Info] GPU programs have been built
+[LightGBM] [Info] Size of histogram bin entry: 8
+[LightGBM] [Info] 20 dense feature groups (15.34 MB) transferred to GPU in 0.024033 secs. 1 sparse feature groups
+[LightGBM] [Info] Start training from score 6954.822954
+lgbm MAPE: 13.6354
+
+Best model: xgb with MAPE: 9.4959
+FINAL_MAPE: 9.495876631918577
+
