@@ -1,0 +1,16 @@
+=== Global Citations from Research Agent ===
+- MLE-STAR: Machine Learning Engineering Agent via Search and Targeted Refinement(arxiv:2506.15692)
+- NVTabular for Data Preprocessing and Feature Engineering
+- Learnable Embeddings for Time Series Forecasting
+- Kaggle Top 100 Solution: Feature Engineering with Aggregations and Fourier Features
+- Mean Encoding Features for Categorical Variables
+- Weighted Root Mean Squared Scaled Error (WRMSSE) Metric
+
+=== Raw Execution Output ===
+Loading and preprocessing data...
+Training model...
+Training until validation scores don't improve for 50 rounds
+Early stopping, best iteration is:
+[607]	valid_0's mape: 0.0103878
+FINAL_MAPE: 9.069400474400409
+

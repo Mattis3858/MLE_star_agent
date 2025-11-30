@@ -9,7 +9,6 @@ import lightgbm as lgb
 import xgboost as xgb
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import mean_absolute_percentage_error
-from bayes_opt import BayesianOptimization
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -96,35 +95,77 @@ def engineer_features(df):
         axis=1
     )
     
-    # NEW: Enhanced calendar features
-    # Public holiday interactions
-    df['StateHoliday'] = df['StateHoliday'].astype(str)
+    # Enhanced calendar features
+    # Holiday effects
     df['is_state_holiday'] = (df['StateHoliday'] != '0').astype(int)
-    df['state_holiday_store_type'] = df['is_state_holiday'] * df['StoreType']
-    df['state_holiday_assortment'] = df['is_state_holiday'] * df['Assortment'].map({'a': 1, 'b': 2, 'c': 3}).fillna(0).astype(int)
+    df['is_public_holiday'] = (df['StateHoliday'] == 'a').astype(int)
+    df['is_easter_holiday'] = (df['StateHoliday'] == 'b').astype(int)
+    df['is_christmas_holiday'] = (df['StateHoliday'] == 'c').astype(int)
     
-    # School holiday interactions
-    df['school_holiday_store_type'] = df['SchoolHoliday'] * df['StoreType']
-    df['school_holiday_assortment'] = df['SchoolHoliday'] * df['Assortment'].map({'a': 1, 'b': 2, 'c': 3}).fillna(0).astype(int)
+    # School vacation patterns
+    df['is_school_vacation'] = df['SchoolHoliday'].astype(int)
     
-    # Combined holiday effects
-    df['any_holiday'] = ((df['is_state_holiday'] == 1) | (df['SchoolHoliday'] == 1)).astype(int)
-    df['both_holidays'] = ((df['is_state_holiday'] == 1) & (df['SchoolHoliday'] == 1)).astype(int)
+    # Enhanced temporal features
+    df['days_from_start'] = (df['Date'] - df['Date'].min()).dt.days
     
-    # Holiday proximity features (1 day before/after)
-    df['day_before_state_holiday'] = df.groupby('Store')['is_state_holiday'].shift(1).fillna(0).astype(int)
-    df['day_after_state_holiday'] = df.groupby('Store')['is_state_holiday'].shift(-1).fillna(0).astype(int)
-    df['day_before_school_holiday'] = df.groupby('Store')['SchoolHoliday'].shift(1).fillna(0).astype(int)
-    df['day_after_school_holiday'] = df.groupby('Store')['SchoolHoliday'].shift(-1).fillna(0).astype(int)
+    # Distance to next holiday (simplified approach)
+    # Create a holiday flag series
+    holiday_dates = df[df['is_state_holiday'] == 1]['Date'].unique()
+    holiday_dates = pd.to_datetime(holiday_dates)
+    holiday_dates = pd.Series(holiday_dates).sort_values()
     
-    # Month-specific holiday patterns
-    df['state_holiday_month'] = df['is_state_holiday'] * df['month']
-    df['school_holiday_month'] = df['SchoolHoliday'] * df['month']
+    # For each date, find the next holiday
+    df_sorted = df.sort_values('Date').reset_index(drop=True)
+    df_sorted['next_holiday_in_days'] = np.nan
     
-    # Weekend and special day flags
-    df['is_weekend'] = (df['day_of_week'] >= 5).astype(int)
-    df['is_weekend_state_holiday'] = df['is_weekend'] * df['is_state_holiday']
-    df['is_weekend_school_holiday'] = df['is_weekend'] * df['SchoolHoliday']
+    for i, date in enumerate(df_sorted['Date'].values):
+        future_holidays = holiday_dates[holiday_dates >= pd.to_datetime(date)]
+        if len(future_holidays) > 0:
+            next_holiday = future_holidays.min()
+            df_sorted.loc[i, 'next_holiday_in_days'] = (next_holiday - pd.to_datetime(date)).days
+        else:
+            # If no future holiday, use a large number
+            df_sorted.loc[i, 'next_holiday_in_days'] = 365
+    
+    # Merge back to original df
+    df = df.merge(df_sorted[['Date', 'Store', 'next_holiday_in_days']], on=['Date', 'Store'], how='left')
+    
+    # Promotion calendar features
+    df['promo_running'] = df['Promo'].astype(int)
+    df['promo2_running'] = ((df['Promo2'] == 1) & 
+                           (df['year'] > df['Promo2SinceYear']) | 
+                           ((df['year'] == df['Promo2SinceYear']) & 
+                            (df['week'] >= df['Promo2SinceWeek']))).astype(int)
+    
+    # Promo interval handling
+    promo_intervals = {
+        'Jan,Apr,Jul,Oct': 1,
+        'Feb,May,Aug,Nov': 2,
+        'Mar,Jun,Sept,Dec': 3,
+        'no_promo_interval': 0
+    }
+    df['promo_interval_encoded'] = df['PromoInterval'].map(promo_intervals).fillna(0)
+    
+    # Month-specific promo flag
+    df['is_promo_month'] = 0
+    for interval, months in [('Jan,Apr,Jul,Oct', [1,4,7,10]), 
+                            ('Feb,May,Aug,Nov', [2,5,8,11]), 
+                            ('Mar,Jun,Sept,Dec', [3,6,9,12])]:
+        mask = (df['PromoInterval'] == interval) & (df['month'].isin(months))
+        df.loc[mask, 'is_promo_month'] = 1
+    
+    # Weekend indicator
+    df['is_weekend'] = (df['day_of_week'].isin([5, 6])).astype(int)  # Saturday=5, Sunday=6
+    
+    # Beginning and end of month effects
+    df['is_month_beginning'] = (df['Date'].dt.day <= 7).astype(int)
+    df['is_month_ending'] = (df['Date'].dt.day >= 24).astype(int)
+    
+    # Seasonal indicators
+    df['is_spring'] = df['month'].isin([3, 4, 5]).astype(int)
+    df['is_summer'] = df['month'].isin([6, 7, 8]).astype(int)
+    df['is_autumn'] = df['month'].isin([9, 10, 11]).astype(int)
+    df['is_winter'] = df['month'].isin([12, 1, 2]).astype(int)
     
     return df
 
@@ -146,13 +187,12 @@ def prepare_features(df):
         'month_sin', 'month_cos', 'day_of_week_sin', 'day_of_week_cos',
         'competition_open_months', 'promo2_weeks', 'is_assortment_b',
         'is_assortment_c', 'store_sales_mean_encoded', 'dow_store_encoded',
-        # NEW: Added calendar and holiday features
-        'is_state_holiday', 'state_holiday_store_type', 'state_holiday_assortment',
-        'school_holiday_store_type', 'school_holiday_assortment', 'any_holiday',
-        'both_holidays', 'day_before_state_holiday', 'day_after_state_holiday',
-        'day_before_school_holiday', 'day_after_school_holiday', 'state_holiday_month',
-        'school_holiday_month', 'is_weekend', 'is_weekend_state_holiday',
-        'is_weekend_school_holiday'
+        # New features
+        'is_state_holiday', 'is_public_holiday', 'is_easter_holiday', 'is_christmas_holiday',
+        'is_school_vacation', 'days_from_start', 'next_holiday_in_days',
+        'promo_running', 'promo2_running', 'promo_interval_encoded', 'is_promo_month',
+        'is_weekend', 'is_month_beginning', 'is_month_ending',
+        'is_spring', 'is_summer', 'is_autumn', 'is_winter'
     ]
     
     return df[feature_columns], df['Sales']
@@ -188,20 +228,16 @@ def train_model(X_train, y_train, X_val, y_val):
         'Store', 'DayOfWeek', 'StateHoliday', 'StoreType', 'Assortment', 'PromoInterval'
     ]]
     
-    # Apply log transformation to target variable
-    y_train_log = np.log1p(y_train)
-    y_val_log = np.log1p(y_val)
-    
     # Create LightGBM datasets
     train_data = lgb.Dataset(
         X_train, 
-        label=y_train_log,
+        label=y_train,
         categorical_feature=categorical_feature_indices
     )
     
     val_data = lgb.Dataset(
         X_val, 
-        label=y_val_log,
+        label=y_val,
         categorical_feature=categorical_feature_indices,
         reference=train_data
     )
@@ -235,9 +271,7 @@ def train_model(X_train, y_train, X_val, y_val):
 
 def evaluate_model(model, X_val, y_val):
     """Evaluate model performance"""
-    y_pred_log = model.predict(X_val, num_iteration=model.best_iteration)
-    # Apply exponential transformation to get back to original scale
-    y_pred = np.expm1(y_pred_log)
+    y_pred = model.predict(X_val, num_iteration=model.best_iteration)
     mape = safe_mape(y_val, y_pred)
     return mape, y_pred
 

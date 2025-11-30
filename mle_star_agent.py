@@ -7,16 +7,16 @@ from typing import TypedDict, List, Dict, Any
 
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage
+
 # from langchain_community.tools import DuckDuckGoSearchRun
 from langgraph.graph import StateGraph, END
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import ArxivAPIWrapper
 from dotenv import load_dotenv
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 load_dotenv()
-ollama_cloud_headers = {
-    "Authorization": f"Bearer {os.environ.get('OLLAMA_API_KEY')}"
-}
+ollama_cloud_headers = {"Authorization": f"Bearer {os.environ.get('OLLAMA_API_KEY')}"}
 
 # =========================
 # LLM 設定
@@ -26,34 +26,47 @@ llm_reasoner = ChatOllama(
     base_url="https://ollama.com",
     headers=ollama_cloud_headers,
     temperature=0.0,
-    keep_alive="15m"
+    keep_alive="60m",
 )
 llm_coder = ChatOllama(
     model="qwen3-coder:480b-cloud",
     base_url="https://ollama.com",
     headers=ollama_cloud_headers,
-    temperature=0.0
+    temperature=0.0,
+    keep_alive="60m",
 )
 
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
+def call_llm_coder(prompt: str):
+    return llm_coder.invoke([HumanMessage(content=prompt)])
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
+def call_llm_reasoner(prompt: str):
+    return llm_reasoner.invoke([HumanMessage(content=prompt)])
+
+
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
-MAX_ITERATIONS = 20
+MAX_ITERATIONS = 15
+
 
 # =========================
 # State 定義（加強 reward / memory）
 # =========================
 class ExperimentLog(TypedDict):
     iteration: int
-    component: str           # 修改了哪個組件 (如: Feature Engineering, Model Params)
-    strategy: str            # 具體策略 (如: Entity Embeddings)
-    citation: str            # 引用來源 (論文或方法論)
+    component: str  # 修改了哪個組件 (如: Feature Engineering, Model Params)
+    strategy: str  # 具體策略 (如: Entity Embeddings)
+    citation: str  # 引用來源 (論文或方法論)
     mape: float
     status: str
-    reasoning: str           # 為什麼做這個改動
-    reward: float            # 根據 MAPE 推出的 reward（例如 -MAPE）
+    reasoning: str  # 為什麼做這個改動
+    reward: float  # 根據 MAPE 推出的 reward（例如 -MAPE）
 
 
 class AgentState(TypedDict):
-    task_description: str      # 任務描述
+    task_description: str  # 任務描述
     design_spec: str
     code: str
     mape_score: float
@@ -63,8 +76,8 @@ class AgentState(TypedDict):
     execution_log: str
     citations: List[str]
     report: str
-    history: List[ExperimentLog]   # 結構化的歷史紀錄，用於生成詳細報告
-    no_improve_rounds: int         # 連續未改善的輪數
+    history: List[ExperimentLog]  # 結構化的歷史紀錄，用於生成詳細報告
+    no_improve_rounds: int  # 連續未改善的輪數
 
 
 # =========================
@@ -77,7 +90,7 @@ def search_node(state: AgentState):
     task_desc = state.get("task_description", "Kaggle Rossmann Store Sales forecasting")
 
     # Arxiv / Web 搜尋工具
-    arxiv_tool = ArxivAPIWrapper(top_k_results=3, doc_content_chars_max=1000)
+    arxiv_tool = ArxivAPIWrapper(top_k_results=3, doc_content_chars_max=2000)
 
     # Tavily 只在有 API key 時啟用，避免沒有 key 就報錯
     tavily_tool = None
@@ -87,30 +100,35 @@ def search_node(state: AgentState):
     results_text = ""
     core_paper_text = ""
 
-    # 策略 0: 題目指定的 Google 論文 (arxiv:2506.15692)
     print(">> Fetching core Google paper (arxiv:2506.15692)...")
     try:
-        # 這裡用 paper id 當作查詢關鍵字
         core_paper_text = arxiv_tool.run("2506.15692")
-        results_text += "\n--- Core Paper (Google 2506.15692) ---\n" + core_paper_text + "\n"
+        results_text += (
+            "\n--- Core Paper (Google 2506.15692) ---\n" + core_paper_text + "\n"
+        )
     except Exception as e:
         print(f"Core paper fetch failed: {e}")
 
-    # 策略 A: 找其他相關論文
     print(">> Searching Arxiv for additional academic context...")
     try:
-        arxiv_result = arxiv_tool.run("machine learning time series forecasting entity embeddings Rossmann")
+        arxiv_result = arxiv_tool.run(
+            "machine learning time series forecasting entity embeddings Rossmann"
+        )
         results_text += f"\n--- Additional Arxiv Papers ---\n{arxiv_result}\n"
     except Exception as e:
         print(f"Arxiv search failed: {e}")
 
-    # 策略 B: 找 Kaggle 實戰 Code
     if tavily_tool is not None:
         print(">> Searching Web (Tavily) for Kaggle solutions...")
         try:
-            tavily_results = tavily_tool.invoke(f"{task_desc} kaggle winner solution feature engineering")
+            tavily_results = tavily_tool.invoke(
+                f"{task_desc} kaggle winner solution feature engineering"
+            )
             web_content = "\n".join(
-                [f"Source: {res['url']}\nContent: {res['content']}" for res in tavily_results]
+                [
+                    f"Source: {res['url']}\nContent: {res['content']}"
+                    for res in tavily_results
+                ]
             )
             results_text += f"\n--- Web Solutions ---\n{web_content}\n"
         except Exception as e:
@@ -124,7 +142,7 @@ You are a Research Scientist.
 You are designing an automated ML agent for the task: "{task_desc}".
 
 We have a **core Google paper** that MUST be treated as a primary reference:
-- Google ML Sales Forecasting Agent (arxiv:2506.15692)
+- MLE-STAR: Machine Learning Engineering Agent via Search and Targeted Refinement (arxiv:2506.15692)
 
 Core Paper (raw text, possibly truncated):
 {core_paper_text}
@@ -133,26 +151,28 @@ Other Search Data:
 {results_text}
 
 Task:
-1. Extract 3-5 key references (paper titles, Kaggle solutions, or method names) that we should implement.
-2. One of the references MUST explicitly be "Google ML Sales Forecasting Agent (arxiv:2506.15692)".
+1. Extract 6 key references (paper titles, Kaggle solutions, or method names) that we should implement.
+2. One of the references MUST explicitly be "MLE-STAR: Machine Learning Engineering Agent via Search and Targeted Refinement(arxiv:2506.15692)".
 3. Focus on:
    - High-Impact Feature Engineering (date parts, lag features, store embeddings, promo effects)
    - ML agent architecture ideas from the Google paper.
 
 Output each reference on its own line, no extra explanation.
 """
-    citation_resp = llm_reasoner.invoke([HumanMessage(content=citation_prompt)])
-    citations = [line.strip("- \"'") for line in citation_resp.content.splitlines() if line.strip()]
+    citation_resp = call_llm_reasoner(citation_prompt)
+    citations = [
+        line.strip("- \"'")
+        for line in citation_resp.content.splitlines()
+        if line.strip()
+    ]
 
-
-    core_ref = "Google ML Sales Forecasting Agent (arxiv:2506.15692)"
-    if not any("2506.15692" in c or "Sales Forecasting Agent" in c for c in citations):
+    core_ref = "MLE-STAR: Machine Learning Engineering Agent via Search and Targeted Refinement (arxiv:2506.15692)"
+    if not any("2506.15692" in c or "MLE-STAR" in c for c in citations):
         citations.insert(0, core_ref)
 
     print(">> Research Agent Citations:")
     for c in citations:
         print(f"   - {c}")
-
 
     spec_prompt = f"""
 Design a machine learning pipeline for {task_desc} based on these references.
@@ -161,7 +181,7 @@ References:
 {os.linesep.join(citations)}
 
 You MUST explicitly align the overall architecture with the ideas from:
-- Google ML Sales Forecasting Agent (arxiv:2506.15692)
+- MLE-STAR: Machine Learning Engineering Agent via Search and Targeted Refinement (arxiv:2506.15692)
 
 The design should include sections for:
 1. Data Preprocessing
@@ -188,7 +208,7 @@ Also briefly describe how an automated ML agent (MLE-STAR-style) will:
 - Tune hyperparameters
 - Iterate based on validation MAPE.
 """
-    spec_resp = llm_reasoner.invoke([HumanMessage(content=spec_prompt)])
+    spec_resp = call_llm_reasoner(spec_prompt)
 
     return {
         "design_spec": spec_resp.content,
@@ -269,6 +289,12 @@ Design Spec:
 7. OUTPUT & PLOTTING:
    - If you generate plots, call `import matplotlib.pyplot as plt` and use `plt.switch_backend('Agg')` at the top to avoid GUI issues.
    - You may optionally save a few key plots (e.g. feature importance) to disk.
+   
+8. PERFORMANCE & VECTORIZATION (MANDATORY):
+   - STRICTLY FORBIDDEN: Do NOT use `iterrows()`, `itertuples()`, or python `for` loops to iterate over DataFrame rows. These are too slow for 1M+ rows.
+   - You MUST use Pandas vectorization, `.apply()`, or `numpy` operations for all feature engineering.
+   - Example: Instead of looping to calculate 'DaysSincePromo', use `df.groupby(...).diff()` or boolean masks.
+   - If feature engineering is complex, prioritize speed over complexity.
 
 The script must:
 - Be fully executable as `python train_iter_X.py` in the current directory.
@@ -277,7 +303,7 @@ The script must:
 
 Output ONLY valid Python code. Do NOT wrap it in markdown fences.
 """
-    response = llm_coder.invoke([HumanMessage(content=prompt)])
+    response = call_llm_coder(prompt)
     code = response.content.strip().replace("```python", "").replace("```", "").strip()
 
     return {
@@ -292,7 +318,9 @@ Output ONLY valid Python code. Do NOT wrap it in markdown fences.
 # =========================
 def refinement_node(state: AgentState):
     current_iteration = state["iteration_count"] + 1
-    print(f"\n=== [Step 3] Optimization Agent: Iteration {current_iteration}/{MAX_ITERATIONS} ===")
+    print(
+        f"\n=== [Step 3] Optimization Agent: Iteration {current_iteration}/{MAX_ITERATIONS} ==="
+    )
 
     current_code = state["code"]
     filename = f"train_iter_{current_iteration}.py"
@@ -306,7 +334,7 @@ def refinement_node(state: AgentState):
             [sys.executable, filename],
             capture_output=True,
             text=True,
-            timeout=1800,
+            timeout=600,
         )
         output = result.stdout + "\n" + result.stderr
 
@@ -326,7 +354,9 @@ def refinement_node(state: AgentState):
             f.write("\n=== Raw Execution Output ===\n")
             f.write(output)
 
-        m = re.search(r"(FINAL_MAPE|Final MAPE|MAPE)\s*[:=]\s*([0-9eE\.\+\-infINF]+)", output)
+        m = re.search(
+            r"(FINAL_MAPE|Final MAPE|MAPE)\s*[:=]\s*([0-9eE\.\+\-infINF]+)", output
+        )
         if m:
             mape_str = m.group(2).strip()
             if "inf" in mape_str.lower():
@@ -370,7 +400,9 @@ def refinement_node(state: AgentState):
 
             # 若目前 best 也是 inf，就沒有 rollback 的意義
             if best_mape == float("inf"):
-                print(">> Best score is still INF. Not reverting. Forcing Agent to fix current broken code.")
+                print(
+                    ">> Best score is still INF. Not reverting. Forcing Agent to fix current broken code."
+                )
                 code_to_optimize = current_code
             else:
                 print(">> CRITICAL: Code broke. Reverting to previous BEST code.")
@@ -397,7 +429,9 @@ def refinement_node(state: AgentState):
 
     # 3. 判斷是否終止（iteration 或連續未改善輪數）
     if current_iteration >= MAX_ITERATIONS:
-        print(f">> Stopping criteria reached. Iterations={current_iteration}, no_improve_rounds={no_improve_rounds}")
+        print(
+            f">> Stopping criteria reached. Iterations={current_iteration}, no_improve_rounds={no_improve_rounds}"
+        )
         return {
             "iteration_count": current_iteration,
             "mape_score": mape,
@@ -456,7 +490,7 @@ Output strictly in JSON:
 }}
 """
     try:
-        plan_resp = llm_reasoner.invoke([HumanMessage(content=plan_prompt)])
+        plan_resp = call_llm_reasoner(plan_prompt)
         plan_text = plan_resp.content.strip()
         if "```json" in plan_text:
             plan_text = plan_text.split("```json")[1].split("```")[0]
@@ -481,15 +515,15 @@ Output strictly in JSON:
     try:
         log_path = os.path.join("logs", f"iter_{current_iteration}.log")
         with open(log_path, "a", encoding="utf-8") as f:
-            f.write("\n\n" + "="*40 + "\n")
+            f.write("\n\n" + "=" * 40 + "\n")
             f.write("=== [Planner Agent] Refinement Strategy ===\n")
-            f.write("="*40 + "\n")
+            f.write("=" * 40 + "\n")
             f.write(f"Status:    {execution_status}\n")
             f.write(f"Component: {plan_data['component']}\n")
             f.write(f"Strategy:  {plan_data['strategy']}\n")
             f.write(f"Citation:  {plan_data['citation']}\n")
             f.write(f"Reasoning: {plan_data['reasoning']}\n")
-            f.write("="*40 + "\n")
+            f.write("=" * 40 + "\n")
     except Exception as e:
         print(f"Warning: Failed to append plan to log: {e}")
 
@@ -508,6 +542,7 @@ REASON: {plan_data['reasoning']}
 **Constraints**:
 - Modify the BASE CODE provided above; do not create an entirely new file structure.
 - Focus your changes on the component: {plan_data['component']}.
+- Do NOT introduce any row-wise loops (iterrows). Use vectorized operations only.
 - Ensure the merged DataFrame is still named `df`.
 - Ensure the line `df = df[(df['Sales'] > 0) & (df['Open'] == 1)]`
   (or an equivalent boolean mask) exists **exactly once** and is executed
@@ -521,8 +556,10 @@ REASON: {plan_data['reasoning']}
 
 Output ONLY the full Python code. Do NOT wrap it in markdown fences.
 """
-    code_resp = llm_coder.invoke([HumanMessage(content=code_prompt)])
-    new_code = code_resp.content.strip().replace("```python", "").replace("```", "").strip()
+    code_resp = call_llm_coder(code_prompt)
+    new_code = (
+        code_resp.content.strip().replace("```python", "").replace("```", "").strip()
+    )
 
     return {
         "code": new_code,
@@ -540,6 +577,11 @@ Output ONLY the full Python code. Do NOT wrap it in markdown fences.
 # Node 4: Report Writer
 # - 說明 multi-agent 架構 & version history
 # =========================
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
+def generate_report_safe(llm, prompt):
+    return llm.invoke([HumanMessage(content=prompt)])
+
+
 def report_node(state: AgentState):
     print("\n=== [Step 4] Analyst Agent: Writing Final Report ===")
 
@@ -548,7 +590,9 @@ def report_node(state: AgentState):
 
     version_table = "| Iter | Strategy | Status | Result (MAPE) |\n|---|---|---|---|\n"
     for h in history:
-        version_table += f"| {h['iteration']} | {h['strategy']} | {h['status']} | {h['mape']} |\n"
+        version_table += (
+            f"| {h['iteration']} | {h['strategy']} | {h['status']} | {h['mape']} |\n"
+        )
 
     history_bullets = "\n".join(
         [
@@ -623,8 +667,15 @@ Write a Markdown report including the following sections:
 
 Output ONLY valid Markdown. Do NOT include backticks around the whole report.
 """
-    response = llm_reasoner.invoke([HumanMessage(content=prompt)])
-    return {"report": response.content}
+    try:
+        # Use the safe retry wrapper
+        response = generate_report_safe(llm_reasoner, prompt)
+        return {"report": response.content}
+    except Exception as e:
+        print(f"Error generating report after retries: {e}")
+        return {
+            "report": "Report generation failed due to network error. Please check logs."
+        }
 
 
 # =========================
@@ -642,13 +693,14 @@ workflow.add_edge("foundation", "refine")
 
 
 def should_continue(state: AgentState):
-    # 同時考慮 iteration 上限與連續未改善輪數
     if state["iteration_count"] < MAX_ITERATIONS:
         return "refine"
     return "report"
 
 
-workflow.add_conditional_edges("refine", should_continue, {"refine": "refine", "report": "report"})
+workflow.add_conditional_edges(
+    "refine", should_continue, {"refine": "refine", "report": "report"}
+)
 workflow.add_edge("report", END)
 
 app = workflow.compile()
