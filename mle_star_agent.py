@@ -16,11 +16,13 @@ from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 load_dotenv()
+
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+MAX_ITERATIONS = 15
+
 ollama_cloud_headers = {"Authorization": f"Bearer {os.environ.get('OLLAMA_API_KEY')}"}
 
-# =========================
-# LLM 設定
-# =========================
+
 llm_reasoner = ChatOllama(
     model="deepseek-v3.1:671b-cloud",
     base_url="https://ollama.com",
@@ -47,26 +49,19 @@ def call_llm_reasoner(prompt: str):
     return llm_reasoner.invoke([HumanMessage(content=prompt)])
 
 
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
-MAX_ITERATIONS = 15
-
-
-# =========================
-# State 定義（加強 reward / memory）
-# =========================
 class ExperimentLog(TypedDict):
     iteration: int
-    component: str  # 修改了哪個組件 (如: Feature Engineering, Model Params)
-    strategy: str  # 具體策略 (如: Entity Embeddings)
-    citation: str  # 引用來源 (論文或方法論)
+    component: str
+    strategy: str
+    citation: str
     mape: float
     status: str
-    reasoning: str  # 為什麼做這個改動
-    reward: float  # 根據 MAPE 推出的 reward（例如 -MAPE）
+    reasoning: str
+    reward: float
 
 
 class AgentState(TypedDict):
-    task_description: str  # 任務描述
+    task_description: str
     design_spec: str
     code: str
     mape_score: float
@@ -76,23 +71,20 @@ class AgentState(TypedDict):
     execution_log: str
     citations: List[str]
     report: str
-    history: List[ExperimentLog]  # 結構化的歷史紀錄，用於生成詳細報告
-    no_improve_rounds: int  # 連續未改善的輪數
+    history: List[ExperimentLog]
+    no_improve_rounds: int
 
 
 # =========================
 # Node 1: Research / Design
-# - 強制讀取題目指定的 Google 論文 (arxiv:2506.15692)
 # =========================
 def search_node(state: AgentState):
     print("\n=== [Step 1] Research Agent: Deep Researching... ===")
 
     task_desc = state.get("task_description", "Kaggle Rossmann Store Sales forecasting")
 
-    # Arxiv / Web 搜尋工具
     arxiv_tool = ArxivAPIWrapper(top_k_results=3, doc_content_chars_max=2000)
 
-    # Tavily 只在有 API key 時啟用，避免沒有 key 就報錯
     tavily_tool = None
     if TAVILY_API_KEY:
         tavily_tool = TavilySearchResults(max_results=5)
@@ -136,7 +128,6 @@ def search_node(state: AgentState):
     else:
         print(">> Tavily API key not set; skipping web search.")
 
-    # LLM 分析：整理核心引用
     citation_prompt = f"""
 You are a Research Scientist.
 You are designing an automated ML agent for the task: "{task_desc}".
@@ -193,7 +184,7 @@ The design should include sections for:
    - Calendar / date features (e.g., year, month, week, day-of-week, promo periods)
    - Store-level features (e.g., store type, competition distance, competition open date)
    - Promotion / holiday related features
-   - Any agentic or automated ideas inspired by the Google paper
+   - Any agentic or automated ideas inspired by the Kaggle solutions or citations
 
 3. Model Selection
    - Favor gradient boosting models (XGBoost / LightGBM) as a strong baseline
@@ -223,7 +214,6 @@ Also briefly describe how an automated ML agent (MLE-STAR-style) will:
 
 # =========================
 # Node 2: Foundation Coder
-# - 加強 MAPE 安全性與資料過濾規則
 # =========================
 def foundation_node(state: AgentState):
     print("\n=== [Step 2] MLE Coder: Writing Base Training Script ===")
@@ -314,7 +304,6 @@ Output ONLY valid Python code. Do NOT wrap it in markdown fences.
 
 # =========================
 # Node 3: Refinement Loop
-# - Planner + Coder + Reward / Memory
 # =========================
 def refinement_node(state: AgentState):
     current_iteration = state["iteration_count"] + 1
@@ -329,7 +318,6 @@ def refinement_node(state: AgentState):
 
     print(f">> Executing {filename}...")
     try:
-        # 增加 timeout，確保模型訓練跑得完
         result = subprocess.run(
             [sys.executable, filename],
             capture_output=True,
@@ -375,7 +363,6 @@ def refinement_node(state: AgentState):
         mape = float("inf")
         print(f">> Execution Failed: {e}")
 
-    # Reward：MAPE 越小 reward 越高
     reward = -mape if mape != float("inf") else -1e9
 
     best_mape = state["best_mape"]
@@ -383,22 +370,19 @@ def refinement_node(state: AgentState):
     execution_status = "Success"
     no_improve_rounds = state.get("no_improve_rounds", 0)
 
-    code_to_optimize = current_code  # 預設：基於當前版本繼續優化
+    code_to_optimize = current_code
 
-    # 情況 A: 找到更好的結果
     if mape < best_mape:
         best_mape = mape
         best_code = current_code
         no_improve_rounds = 0
         print(f">> New Best Found! (MAPE = {mape})")
 
-    # 情況 B: 沒有變好
     else:
         if mape == float("inf"):
             execution_status = "Failed"
             no_improve_rounds += 1
 
-            # 若目前 best 也是 inf，就沒有 rollback 的意義
             if best_mape == float("inf"):
                 print(
                     ">> Best score is still INF. Not reverting. Forcing Agent to fix current broken code."
@@ -408,12 +392,10 @@ def refinement_node(state: AgentState):
                 print(">> CRITICAL: Code broke. Reverting to previous BEST code.")
                 code_to_optimize = best_code
         else:
-            # 結果沒變好但程式有跑完：採保守策略回滾
             no_improve_rounds += 1
             print(f">> No Improvement (Current: {mape}, Best: {best_mape})")
             code_to_optimize = best_code
 
-    # 儲存這一輪的實驗紀錄（先填入共通欄位，稍後由 Planner 補 component/strategy/citation/reasoning）
     new_log: ExperimentLog = {
         "iteration": current_iteration,
         "component": "",
@@ -427,7 +409,6 @@ def refinement_node(state: AgentState):
 
     history = state["history"] + [new_log]
 
-    # 3. 判斷是否終止（iteration 或連續未改善輪數）
     if current_iteration >= MAX_ITERATIONS:
         print(
             f">> Stopping criteria reached. Iterations={current_iteration}, no_improve_rounds={no_improve_rounds}"
@@ -453,7 +434,6 @@ def refinement_node(state: AgentState):
         ]
     )
 
-    # 擴大 Log Context 到 5000 字元，以免漏掉 traceback
     log_snippet = output[-5000:]
 
     plan_prompt = f"""
@@ -575,7 +555,6 @@ Output ONLY the full Python code. Do NOT wrap it in markdown fences.
 
 # =========================
 # Node 4: Report Writer
-# - 說明 multi-agent 架構 & version history
 # =========================
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
 def generate_report_safe(llm, prompt):
@@ -668,7 +647,6 @@ Write a Markdown report including the following sections:
 Output ONLY valid Markdown. Do NOT include backticks around the whole report.
 """
     try:
-        # Use the safe retry wrapper
         response = generate_report_safe(llm_reasoner, prompt)
         return {"report": response.content}
     except Exception as e:
@@ -678,9 +656,7 @@ Output ONLY valid Markdown. Do NOT include backticks around the whole report.
         }
 
 
-# =========================
 # Workflow Setup
-# =========================
 workflow = StateGraph(AgentState)
 workflow.add_node("search", search_node)
 workflow.add_node("foundation", foundation_node)
@@ -709,7 +685,7 @@ if __name__ == "__main__":
     if not (os.path.exists("train.csv") and os.path.exists("store.csv")):
         print("Please ensure 'train.csv' and 'store.csv' are in the current directory.")
     else:
-        print("Starting MLE-STAR Agent (Enhanced)...")
+        print("Starting MLE-STAR Agent")
         initial_state: Dict[str, Any] = {
             "task_description": "Rossmann Store Sales forecasting using train.csv and store.csv"
         }
