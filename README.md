@@ -19,6 +19,61 @@ MLE-AI-AGENT/
 ```
 
 ### 2. 核心架構與工作流: 
+```mermaid
+graph TD
+    classDef reasoner fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    classDef coder fill:#fff3e0,stroke:#e65100,stroke-width:2px;
+    classDef process fill:#f3e5f5,stroke:#4a148c,stroke-width:1px,stroke-dasharray: 5 5;
+    classDef storage fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px;
+
+    Start((Start)) --> Research
+
+    subgraph "Phase 1: Knowledge Acquisition"
+        Research[<b>Research Agent</b><br/>Model: DeepSeek-V3]:::reasoner
+        Tools[External Tools<br/>Arxiv API and Tavily Search]:::process
+        Research <--> Tools
+    end
+
+    Research -->|Design Spec & Citations| Foundation
+
+    subgraph "Phase 2: Initial Strategy"
+        Foundation[<b>Foundation Coder</b><br/>Model: Qwen-Coder]:::coder
+        BaseCode(Generate Initial<br/>Baseline Script)
+        Foundation --> BaseCode
+    end
+
+    BaseCode --> Execute
+
+    subgraph "Phase 3: Refinement Loop"
+        direction TB
+        Execute[<b>Execution Environment</b><br/>Subprocess Run]:::process
+        Execute -->|Logs and MAPE| Evaluator{<b>Evaluate</b><br/>Is Best Score?}
+        
+        Evaluator -- Yes --> UpdateBest[Update Best Model]:::storage
+        Evaluator -- No/Error --> Recovery[Rollback / Fix Logic]
+        
+        UpdateBest & Recovery --> Planner
+        
+        Planner[<b>Planner Agent</b><br/>Model: DeepSeek-V3]:::reasoner
+        Planner -->|Strategy| Coder
+        
+        Coder[<b>Coder Agent</b><br/>Model: Qwen-Coder]:::coder
+        Coder -->|Refined Script| Execute
+    end
+
+    Evaluator -- Max Iterations Reached --> Analyst
+
+    subgraph "Phase 4: Delivery"
+        Analyst[<b>Analyst Agent</b><br/>Model: DeepSeek-V3]:::reasoner
+        Artifacts[(<b>Final Artifacts</b><br/>Report, Best Model, Logs)]:::storage
+        Analyst --> Artifacts
+    end
+
+    Artifacts --> End((End))
+
+    linkStyle default stroke:#333,stroke-width:1px;
+```
+
 本系統採用 StateGraph 狀態機架構，包含四個主要節點：
 1. Research Agent (Search Node)：
     - 搜尋學術論文 (Arxiv) 與 Kaggle 優勝方案 (Tavily Search)。
