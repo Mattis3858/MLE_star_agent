@@ -20,6 +20,7 @@ MLE-AI-AGENT/
 
 ### 2. 核心架構與工作流: 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'darkMode': false }}}%%
 graph TD
     classDef reasoner fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
     classDef coder fill:#fff3e0,stroke:#e65100,stroke-width:2px;
@@ -71,7 +72,7 @@ graph TD
 
     Artifacts --> End((End))
 
-    linkStyle default stroke:#333,stroke-width:1px;
+    linkStyle default stroke:#333,stroke-width:2px;
 ```
 
 #### 本系統採用 StateGraph 狀態機架構，包含四個主要節點：
