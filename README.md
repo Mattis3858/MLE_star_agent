@@ -12,7 +12,7 @@ MLE-AI-AGENT/
 │   ├── analysis_report.md     # Analyst Agent 自動撰寫的完整分析報告
 │   ├── final_best_model.py    # 經過多次迭代優化後，MAPE 最低的訓練程式碼
 │   └── feature_importance.png
-├── logs/                      # 用於追蹤 Agent 思考過程與 Debug
+├── logs/                      # 用於追蹤 Agent 思考過程、優化策略與 Debug
 ├── train_iter/                # 迭代過程的各版本程式碼
 ├── mle_star_agent.py          # 主要程式碼
 └── requirements.txt
