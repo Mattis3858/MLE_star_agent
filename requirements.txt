@@ -1,0 +1,21 @@
+# --- Agent Core Framework ---
+langchain-core
+langchain-ollama
+langchain-community
+langgraph
+dotenv
+tenacity
+
+# --- External Tools & APIs ---
+arxiv
+tavily-python
+
+# --- Machine Learning Environment---
+numpy
+pandas
+scikit-learn
+matplotlib
+seaborn
+xgboost
+lightgbm
+catboost
