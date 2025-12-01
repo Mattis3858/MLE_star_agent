@@ -112,6 +112,8 @@ graph TD
 - 防退化機制 (Rollback)：具備版本控制概念，確保最終生成的程式碼是歷次迭代中表現最好的版本。
 
 ### 4. 環境需求與安裝:
+本專案使用 Python **3.13.0** 進行開發。
+
 可直接執行 ```pip install -r requirements.txt```
 或手動安裝:
 ```bash
