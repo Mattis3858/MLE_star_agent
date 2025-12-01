@@ -20,24 +20,25 @@ MLE-AI-AGENT/
 
 ### 2. 核心架構與工作流: 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'darkMode': false }}}%%
 graph TD
-    classDef reasoner fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
-    classDef coder fill:#fff3e0,stroke:#e65100,stroke-width:2px;
-    classDef process fill:#f3e5f5,stroke:#4a148c,stroke-width:1px,stroke-dasharray: 5 5;
-    classDef storage fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px;
+    classDef reasoner fill:#e1f5fe,stroke:#01579b,stroke-width:3px,font-size:18px,font-weight:bold;
+    classDef coder fill:#fff3e0,stroke:#e65100,stroke-width:3px,font-size:18px,font-weight:bold;
+    classDef process fill:#f3e5f5,stroke:#4a148c,stroke-width:2px,stroke-dasharray: 5 5,font-size:16px;
+    classDef storage fill:#e8f5e9,stroke:#1b5e20,stroke-width:3px,font-size:16px,font-weight:bold;
 
     Start((Start)) --> Research
 
     subgraph "Phase 1: Knowledge Acquisition"
-        Research[<b>Research Agent</b><br/>Model: DeepSeek-V3]:::reasoner
-        Tools[External Tools<br/>Arxiv API and Tavily Search]:::process
+        Research[Research Agent<br/><sub>Model: DeepSeek-V3</sub>]:::reasoner
+        Tools[External Tools<br/><sub>Arxiv API & Tavily Search</sub>]:::process
         Research <--> Tools
     end
 
     Research -->|Design Spec & Citations| Foundation
 
     subgraph "Phase 2: Initial Strategy"
-        Foundation[<b>Foundation Coder</b><br/>Model: Qwen-Coder]:::coder
+        Foundation[Foundation Coder<br/><sub>Model: Qwen-Coder</sub>]:::coder
         BaseCode(Generate Initial<br/>Baseline Script)
         Foundation --> BaseCode
     end
@@ -46,35 +47,36 @@ graph TD
 
     subgraph "Phase 3: Refinement Loop"
         direction TB
-        Execute[<b>Execution Environment</b><br/>Subprocess Run]:::process
-        Execute -->|Logs and MAPE| Evaluator{<b>Evaluate</b><br/>Is Best Score?}
+        Execute[Execution Environment<br/><sub>Subprocess Run</sub>]:::process
+        Execute -->|Logs & MAPE| Evaluator{Evaluate<br/><sub>Is Best Score?</sub>}
         
         Evaluator -- Yes --> UpdateBest[Update Best Model]:::storage
         Evaluator -- No/Error --> Recovery[Rollback / Fix Logic]
         
         UpdateBest & Recovery --> Planner
         
-        Planner[<b>Planner Agent</b><br/>Model: DeepSeek-V3]:::reasoner
+        Planner[Planner Agent<br/><sub>Model: DeepSeek-V3</sub>]:::reasoner
         Planner -->|Strategy| Coder
         
-        Coder[<b>Coder Agent</b><br/>Model: Qwen-Coder]:::coder
+        Coder[Coder Agent<br/><sub>Model: Qwen-Coder</sub>]:::coder
         Coder -->|Refined Script| Execute
     end
 
     Evaluator -- Max Iterations Reached --> Analyst
 
     subgraph "Phase 4: Delivery"
-        Analyst[<b>Analyst Agent</b><br/>Model: DeepSeek-V3]:::reasoner
-        Artifacts[(<b>Final Artifacts</b><br/>Report, Best Model, Logs)]:::storage
+        Analyst[Analyst Agent<br/><sub>Model: DeepSeek-V3</sub>]:::reasoner
+        Artifacts[(Final Artifacts<br/><sub>Report, Best Model, Logs</sub>)]:::storage
         Analyst --> Artifacts
     end
 
     Artifacts --> End((End))
 
-    linkStyle default stroke:#333,stroke-width:1px;
+    linkStyle default stroke:#333,stroke-width:2px;
 ```
 
-本系統採用 StateGraph 狀態機架構，包含四個主要節點：
+
+#### 本系統採用 StateGraph 狀態機架構，包含四個主要節點：
 1. Research Agent (Search Node)：
     - 搜尋學術論文 (Arxiv) 與 Kaggle 優勝方案 (Tavily Search)。
     - 目的：獲取針對時間序列預測與實體嵌入 (Entity Embeddings) 的最新技術與特徵工程策略。
