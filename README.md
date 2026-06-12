@@ -1,180 +1,167 @@
 # MLE-STAR: Autonomous Machine Learning Optimization Agent
 ## 針對 Rossmann Store Sales 預測任務的自動化機器學習 AI Agent 系統
 
-> ## ⚡ v2.0 重構說明
-> 本專案已依據 `REFACTOR_PLAN.md` 完成大規模重構，由單一腳本改為 `mle_star/` 套件。核心改變：
->
-> 1. **誠實評估 (Honest Evaluation)**：v1 由 LLM 自行撰寫切分與評分程式，導致驗證 MAPE 可被洩漏至 <1%（不可信）。v2 改為 **Harness 擁有資料、切分與評分**——LLM 只撰寫 `build_pipeline()`（未擬合的 sklearn Pipeline），由 Harness 負責 fit/predict/score。所有時序特徵（lag/rolling）皆以 ≥42 天位移計算，並新增**只評分一次的 test set**（最後 42 天）防止 adaptive overfitting。
-> 2. **搜尋智慧**：Solution-tree beam search（可從任一 frontier 節點分支）、策略黑名單、Ablation 證據驅動的 Planner、Optuna 數值調參（LLM 只負責結構）、Top-K Ensemble。
-> 3. **強健性**：專職 Debug 自我修復迴圈、確定性（固定 seed，同 seed 分數完全一致）、雜訊門檻（改善需超過 noise floor 才算數）、checkpoint/`--resume`、token/時間預算控管。
->
-> **誠實基準**：Baseline 在 holdout 上約 **MAPE 8.2% / RMSPE 10.9%**。執行方式：`python -m mle_star`（測試：`python test/test_system.py`，無需 LLM 金鑰）。以下章節描述 v1 之原始設計，保留作為歷史脈絡。
+### 1. 專案概述 (Overview)
 
-### 1. 專案概述 (Overview): 
-MLE-STAR (Machine Learning Engineering Agent via Search and Targeted Refinement) 旨在全自動化機器學習流程。
+MLE-STAR (Machine Learning Engineering Agent via Search and Targeted Refinement) 是一套全自動化的機器學習工程系統：整合 DeepSeek-V3 (Reasoner) 與 Qwen-Coder (Coder) 兩個 LLM，自主完成資料剖析、文獻探討、模型程式撰寫、錯誤修復、超參數優化與報告產出。
 
-而本專案針對 Rossmann Store Sales 資料集進行微調，透過整合 DeepSeek-V3 (Reasoner) 與 Qwen-Coder (Coder) 兩個大型語言模型，自主進行文獻探討、程式碼撰寫、模型訓練、錯誤修復以及超參數優化，最終產出最佳化的預測模型與分析報告。
+**v2.0 的核心設計哲學：「Harness is law; prompts are suggestions.」**
+所有與正確性相關的環節（資料切分、特徵的時序紀律、評分）皆由確定性的 Harness 程式碼掌控，LLM 只負責「設計」——這使得回報的分數**結構上不可能被洩漏**（v1 曾因 LLM 自行撰寫評分程式而產出 <1% 的虛假 MAPE）。
 
 #### 專案架構
 ```text
-MLE-AI-AGENT/
-├── outputs/
-│   ├── analysis_report.md     # Analyst Agent 自動撰寫的完整分析報告
-│   ├── final_best_model.py    # 經過多次迭代優化後，MAPE 最低的訓練程式碼
-│   └── feature_importance.png
-├── logs/                      # 用於追蹤 Agent 思考過程、優化策略與 Debug
-├── train_iter/                # 迭代過程的各版本程式碼
-├── mle_star_agent.py          # 主要程式碼
+MLE_star_agent/
+├── mle_star/                  # 主套件
+│   ├── config.py              #   參數、路徑、預算、seed
+│   ├── data.py                #   載入、強制不變量、時序特徵、三段式切分
+│   ├── profiling.py           #   (B1) 確定性 EDA 剖析
+│   ├── harness.py             #   候選評估：AST/政策閘門、子行程、記憶體看門狗
+│   ├── runner.py              #   子行程：seed、fit/predict/score、JSON 結果
+│   ├── baseline_candidate.py  #   Harness 自有的基準模型（noise floor + 合約範例）
+│   ├── llm.py                 #   LLM 客戶端、重試、token 帳本
+│   ├── prompts.py             #   所有 prompt 模板
+│   ├── store.py               #   (D3) 實驗存儲 / solution tree / checkpoint
+│   ├── agents.py              #   LangGraph 節點：research/foundation/refine/finalize/report
+│   └── graph.py               #   流程圖接線
+├── test/test_system.py        # 無需 LLM 的煙霧測試（8 項）
+├── outputs/                   # 交付物：最佳模型、報告、experiments.jsonl
+├── train_iter/                # （執行期）各候選模組
+├── REFACTOR_PLAN.md           # v2 架構規格書（A1-E 條目編號出處）
 └── requirements.txt
 ```
 
-### 2. 核心架構與工作流: 
+### 2. 核心架構與工作流
+
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial', 'darkMode': false }}}%%
+%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '16px', 'fontFamily': 'arial' }}}%%
 graph TD
     classDef reasoner fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
     classDef coder fill:#fff3e0,stroke:#e65100,stroke-width:2px;
-    classDef process fill:#f3e5f5,stroke:#4a148c,stroke-width:1px,stroke-dasharray: 5 5;
+    classDef harness fill:#fce4ec,stroke:#880e4f,stroke-width:2px;
     classDef storage fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px;
 
-    Start((Start)) --> Research
+    Start((Start)) --> Profile
 
-    subgraph "Phase 1: Knowledge Acquisition"
-        Research[<b>Research Agent</b><br/>Model: DeepSeek-V3]:::reasoner
-        Tools[External Tools<br/>Arxiv API and Tavily Search]:::process
-        Research <--> Tools
+    subgraph "Phase 1: Research & EDA"
+        Profile[<b>Data Profiler</b><br/>確定性 pandas 統計]:::harness
+        Research[<b>Research Agent</b><br/>DeepSeek-V3 + Arxiv/Tavily]:::reasoner
+        Profile --> Research
     end
 
-    Research -->|Design Spec & Citations| Foundation
+    Research -->|Design Spec| Foundation
 
-    subgraph "Phase 2: Initial Strategy"
-        Foundation[<b>Foundation Coder</b><br/>Model: Qwen-Coder]:::coder
-        BaseCode(Generate Initial<br/>Baseline Script)
-        Foundation --> BaseCode
+    subgraph "Phase 2: Foundation"
+        Noise[<b>Noise Floor</b><br/>Baseline x 多 seed<br/>建立改善門檻]:::harness
+        Foundation[<b>Foundation Coder</b><br/>Qwen-Coder 撰寫 build_pipeline]:::coder
+        Noise --> Foundation
     end
 
-    BaseCode --> Execute
+    Foundation --> Evaluate
 
-    subgraph "Phase 3: Refinement Loop"
-        direction TB
-        Execute[<b>Execution Environment</b><br/>Subprocess Run]:::process
-        Execute -->|Logs and MAPE| Evaluator{<b>Evaluate</b><br/>Is Best Score?}
-        
-        Evaluator -- Yes --> UpdateBest[Update Best Model]:::storage
-        Evaluator -- No/Error --> Recovery[Rollback / Fix Logic]
-        
-        UpdateBest & Recovery --> Planner
-        
-        Planner[<b>Planner Agent</b><br/>Model: DeepSeek-V3]:::reasoner
-        Planner -->|Strategy| Coder
-        
-        Coder[<b>Coder Agent</b><br/>Model: Qwen-Coder]:::coder
-        Coder -->|Refined Script| Execute
+    subgraph "Phase 3: Refinement Loop (Beam Search)"
+        Evaluate[<b>Harness 評估</b><br/>AST 閘門 → 子行程<br/>fit/score + Optuna HPO]:::harness
+        Evaluate -->|失敗| Debugger[<b>Debugger</b><br/>traceback 自我修復<br/>最多 3 次]:::coder
+        Debugger --> Evaluate
+        Evaluate -->|JSON 結果| Tree[(<b>Solution Tree</b><br/>experiments.jsonl)]:::storage
+        Tree --> Ablation[<b>Ablation</b><br/>定期特徵組消融]:::harness
+        Ablation --> Planner[<b>Planner Agent</b><br/>frontier/黑名單/消融證據<br/>→ 單一具體策略]:::reasoner
+        Planner -->|分支或重啟| Coder[<b>Coder Agent</b><br/>修改候選模組]:::coder
+        Coder --> Evaluate
     end
 
-    Evaluator -- Max Iterations Reached --> Analyst
+    Tree -->|收斂或預算盡| Finalize
 
-    subgraph "Phase 4: Delivery"
-        Analyst[<b>Analyst Agent</b><br/>Model: DeepSeek-V3]:::reasoner
-        Artifacts[(<b>Final Artifacts</b><br/>Report, Best Model, Logs)]:::storage
-        Analyst --> Artifacts
+    subgraph "Phase 4: Finalize & Report"
+        Finalize[<b>Finalize</b><br/>CV 確認 → Test 評分一次<br/>→ Top-K Ensemble]:::harness
+        Analyst[<b>Analyst Agent</b><br/>DeepSeek-V3 報告 + 經驗帳本]:::reasoner
+        Finalize --> Analyst
     end
 
-    Artifacts --> End((End))
-
-    linkStyle default stroke:#333,stroke-width:2px;
+    Analyst --> End((End))
 ```
 
-#### 本系統採用 StateGraph 狀態機架構，包含四個主要節點：
-1. Research Agent (Search Node)：
-    - 搜尋學術論文 (Arxiv) 與 Kaggle 優勝方案 (Tavily Search)。
-    - 目的：獲取針對時間序列預測與實體嵌入 (Entity Embeddings) 的最新技術與特徵工程策略。
-    - 輸出：生成一份包含特徵工程與模型選擇的 Design Spec。
-2. Foundation Coder (Foundation Node)：
-    - 根據設計規範撰寫初代 Python 訓練腳本。
-    - 安全防護：內建強制性規則（如過濾 Sales > 0、防止 Data Leakage），確保基礎程式碼的正確性。
-    - 硬體感知：自動偵測 GPU 並配置 XGBoost/LightGBM 的加速參數
-3. Refinement Loop (Refinement Node) - 核心:
+#### 五個階段
+1. **Research & EDA (B1/B7)**：Harness 以 pandas 計算真實資料剖析（缺失、偏態、洩漏候選欄位），LLM 只負責「解讀」；同時檢索論文 (Arxiv) 與 Kaggle 解法（含程式碼片段，僅作靈感、絕不執行）。
+2. **Foundation (A3)**：先以多組 seed 執行基準模型估計 **noise floor**——之後任何「改善」必須超過 `max(0.05, 2σ)` 才算數，避免 Planner 追逐雜訊。接著由 Coder 撰寫第一個候選模組。
+3. **Refinement Loop (B2/B3/B4/C1)**：每輪 = Harness 評估（含 Optuna 數值調參）→ 失敗則進入專職 Debug 迴圈 → 節點寫入 solution tree → Planner 依據 frontier、策略黑名單、消融證據與遙測（時間/記憶體）決定**單一**下個實驗，可從任一有望節點分支，停滯時強制重啟。
+4. **Finalize (A2/B5/B6)**：Top-K 候選以 expanding-window CV 確認 → **test set（最後 42 天）只評分一次** → 以驗證集權重混合 Ensemble。
+5. **Report (D4)**：Analyst 產出含誠實評估協議說明的報告，並將本次經驗寫入 `learned_lessons.md` 供未來執行參考。
 
-    迭代優化的循環過程（預設 15 次迭代）：
-    - 執行 (Execute)：執行所在的 Python 訓練腳本。
-    - 評估 (Evaluate)：解析輸出 log，獲取 MAPE 分數與錯誤訊息。
-    - 決策 (Planner Agent)：
-        - 若失敗 (Error/Inf)：分析 Traceback 並提出修正方案。
-        - 若成功但未提升：提出新的特徵工程策略（如 Log Transform, Lag Features）。
-    - Rollback 機制：若新程式碼導致效能下降或崩潰，系統會自動回朔至上一個最佳版本。
-    - 實作 (Coder Agent)：根據計畫修改程式碼。
-4. Analyst Agent (Report Node)：
-    - 在迭代結束後，彙整所有的實驗紀錄 (Experiment Log)。
-    - 輸出：生成一份 Markdown 格式的總結報告，包含方法論、嘗試過的策略列表以及最佳 MAPE 成績。
+### 3. 誠實評估協議 (Honest Evaluation) — v2 的根本差異
 
-### 3. 技術特點:
-本專案特別針對面試挑戰的加分條件進行設計：
+| 機制 | 實作 |
+|---|---|
+| 候選合約 (A1) | LLM 只回傳**未擬合**的 sklearn Pipeline；Harness 負責 fit/predict/score，可擬合的轉換因此「結構上」只能 fit 在訓練集 |
+| 三段式時序切分 (A2) | train / validation（驅動所有決策）/ test（最後 42 天，**整個流程只評分一次**） |
+| 時序特徵紀律 | 所有 lag/rolling 位移 ≥ 42 天（= 預測視野），val/test 列不可能看到自身區段的銷售 |
+| Target encoding | 只 fit 在 `val_start − 84 天` 之前的資料，於 holdout 與 CV 兩種模式皆誠實 |
+| 洩漏欄位 | `Customers`（預測時不存在）由 Harness 硬性排除，LLM 無從使用 |
+| 確定性 (A3) | 子行程強制 seed；同 seed 分數完全一致（測試斷言至 1e-9） |
+| 指標 (A4/A5) | Harness 以 JSON 回傳 MAPE+RMSPE（可插拔），完全移除 v1 的 stdout 正則解析 |
 
-- 全本地/開源模型 (Bonus #2)：不依賴付費 Claude API，完全使用 DeepSeek 與 Qwen 透過 Ollama 執行，確保資料隱私與成本效益。
+**誠實基準**：baseline 約 **MAPE 8.2% / RMSPE 10.9%**（holdout）。若任何候選回報 MAPE < 2%，應先懷疑洩漏而非慶祝。
 
-- 自主實作 Multi-Agent 架構 (Bonus #1, #3)：不使用現成的 Claude-flow，而是自行透過 LangGraph 構建狀態機。清晰定義 Research, Planner, Coder, Analyst 職責，並透過 Memory 共享上下文。
+### 4. 環境需求與安裝
 
-- 自我修復與優化 (Bonus #4, #5)：系統具備 "Refinement Logic" 與 Reward 機制，能從 錯誤中自主修正，並針對驗證集回饋 (MAPE) 動態調整特徵策略。
+Python **3.13**。
 
-- 結構化日誌與引用 (Bonus #7)：透過 ExperimentLog 追蹤每一次迭代的策略、組件與結果，並自動標註該版本參考的文獻來源。
-
-- 防退化機制 (Rollback)：具備版本控制概念，確保最終生成的程式碼是歷次迭代中表現最好的版本。
-
-### 4. 環境需求與安裝:
-本專案使用 Python **3.13.0** 進行開發。
-
-可直接執行 ```pip install -r requirements.txt```
-或手動安裝:
 ```bash
-# Agent Framework
-pip install langchain-core langchain-ollama langchain-community langgraph tavily-python arxiv dotenv tenacity
-# Machine Learning
-pip install pandas numpy scikit-learn xgboost lightgbm catboost matplotlib
+pip install -r requirements.txt
 ```
-API 配置請在專案根目錄建立 .env 檔案，填入以下資訊：
-```.env
+
+`.env`（專案根目錄）：
+```
 OLLAMA_API_KEY=your_ollama_key_here
-TAVILY_API_KEY=your_tavily_key_here
+TAVILY_API_KEY=your_tavily_key_here   # 選填；缺少時略過網路檢索
 ```
 
-#### 資料準備
-請確保以下兩個檔案位於專案根目錄：
-- train.csv (Rossmann 訓練資料)
-- store.csv (店鋪資訊)
+資料：將 `train.csv` 與 `store.csv` 置於專案根目錄（[Kaggle Rossmann](https://www.kaggle.com/competitions/rossmann-store-sales/data)）。
 
-### 5. 使用說明 (Usage):
-直接執行主程式即可啟動自動化流程：```python -m mle_star_agent```
+### 5. 使用說明 (Usage)
 
-執行過程監控系統會在 Console 輸出詳細的步驟：
-- [Step 1] Research Agent: 顯示搜尋到的論文與 Kaggle 方案。
-- [Step 2] MLE Coder: 生成基礎程式碼。
-- [Step 3] Optimization Agent: 顯示每次迭代的 MAPE 分數與優化策略。
-- [Step 4] Analyst Agent: 撰寫報告。
+```bash
+python -m mle_star                 # 完整執行
+python -m mle_star --max-iter 5    # 短程驗證
+python -m mle_star --resume        # 從 checkpoint 續跑 (C3)
+python -m mle_star --force-data    # 重建資料快取
+python test/test_system.py         # 煙霧測試（無需 LLM 金鑰）
+```
 
-輸出產物
-執行完成後，將生成以下檔案：
-- final_best_model.py: 經過多次優化後，MAPE 分數最低的完整 Python 訓練腳本。
-- analysis_report.md: 包含實驗歷程與洞察的完整分析報告。
-- train_iter_X.py: (過程檔案) 各次迭代的臨時腳本。
-- logs/: 詳細的執行日誌。
+輸出產物（`outputs/`）：
+- `final_best_model.py`：最佳候選模組（build_pipeline 合約）
+- `analysis_report.md`：含誠實評估協議說明的完整報告
+- `final_results.json`：val/CV/test 分數、ensemble 權重、token 用量
+- `experiments.jsonl`：每個候選節點的完整結構化紀錄（取代 v1 的 .log 解析）
 
-### 6. Configuration 可以在程式碼開頭調整以下參數：
-- MAX_ITERATIONS: 預設為 15。增加此數值可讓 Agent 進行更深度的特徵工程探索。
-- llm_reasoner: 目前設定為 deepseek-v3.1。
-- llm_coder: 目前設定為 qwen3-coder。
+### 6. Configuration
 
-### 7. 結果總結
-本系統透過 MLE-STAR multi-agent 架構自動進行了 15 輪的假設驗證與程式碼優化，最終成功構建出 MAPE 為 9.07% 的銷售預測模型。
+主要參數集中於 `mle_star/config.py`，部分支援環境變數覆寫：
 
-成果
-- 最終驗證分數 (Final MAPE)：9.07%
-- 效能提升關鍵：
-    1. 目標變數對數轉換 (Log-Transform)：參考 citation，解決了銷售數據右偏問題，帶來最顯著的精度提升 (Iter 14)。
-    2. 高階日曆特徵：引入 Kaggle 冠軍方案建議的「距離假期天數」、「學校假期」與「促銷序列」特徵 (Iter 6, 12)。
-    3. 自我修復能力：系統在前 5 輪遭遇 LightGBM 參數錯誤導致 MAPE 為 Inf，Planner Agent 成功調整並修正。
+| 參數 | 預設 | 說明 |
+|---|---|---|
+| `MAX_ITERATIONS` / `MLE_STAR_MAX_ITER` | 20 | 精煉迴圈上限 |
+| `METRIC` / `MLE_STAR_METRIC` | mape | 選擇指標（mape / rmspe） |
+| `BEAM_WIDTH` | 3 | frontier 寬度 |
+| `PATIENCE` | 6 | 連續未改善即提前停止 |
+| `OPTUNA_TRIALS_FAST` | 15 | 每候選的數值調參預算 |
+| `TOKEN_BUDGET` / `MLE_STAR_TOKEN_BUDGET` | 2,000,000 | token 預算，超過即優雅終止 |
+| `MEMORY_LIMIT_MB` / `EXEC_TIMEOUT_S` | 8000 / 900 | 硬性資源上限（看門狗直接 kill） |
 
+### 7. 技術特點
 
-### 8. References
-- [Kaggle Datasets](https://www.kaggle.com/competitions/rossmann-store-sales/data) 
-- [MLE-STAR: Machine Learning Engineering Agent via Search and Targeted Refinement](https://arxiv.org/pdf/2506.15692)
+- **全開源模型**：DeepSeek-V3 + Qwen-Coder（Ollama Cloud），不依賴付費 Claude API。
+- **自主實作 Multi-Agent 架構**：以 LangGraph 構建狀態機，職責清晰（Profiler / Research / Foundation / Debugger / Planner / Coder / Analyst），以 solution tree 共享上下文。
+- **自我修復**：專職 Debug 迴圈（traceback 萃取 + 錯誤驅動檢索），與「改善」迴圈分離，壞程式不消耗優化迭代。
+- **證據驅動的優化**：Planner 收到的是 ablation 消融數據、遙測與黑名單，而非僅憑想像猜「最弱組件」。
+- **防退化與防雜訊**：solution tree 永遠從最佳節點分支；改善需超過實測 noise floor 才被承認。
+- **可恢復、可預算**：checkpoint/`--resume`、token 與 wall-clock 預算、記憶體看門狗。
+- **結構化實驗紀錄**：`experiments.jsonl` 同時支撐 beam search、消融證據、續跑與最終報告。
+
+### 8. 版本歷史
+
+- **v2.0**（本版）：依 `REFACTOR_PLAN.md` 重構為套件；誠實評估（harness-owned split/metric/features）、beam search、Optuna、ensemble、debug 迴圈、確定性與預算控管。v1 的 <1% MAPE 經查為資料洩漏，v2 以架構層面根除。
+- **v1.0**：單檔 `mle_star_agent.py`，LLM 撰寫完整訓練腳本、以 stdout 正則解析 MAPE。歷史紀錄見 git 歷史與 `train_iter/` 早期提交。
+
+### 9. References
+- [MLE-STAR: Machine Learning Engineering Agent via Search and Targeted Refinement (arxiv:2506.15692)](https://arxiv.org/pdf/2506.15692)
+- [Kaggle Rossmann Store Sales](https://www.kaggle.com/competitions/rossmann-store-sales/data)
