@@ -1,8 +1,18 @@
+# Secrets & environment
 .env
+
+# Tooling
 .qodo
-__pycache__
-venv
-data
+
+# Python
+__pycache__/
+venv/
+
+# Data (large / provided separately)
+data/
 store.csv
 train.csv
-catboost_info
+
+# Runtime artifacts (regenerated each run)
+catboost_info/
+logs/

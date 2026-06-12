@@ -47,6 +47,16 @@ def load_data():
     # Convert date column to datetime
     df['Date'] = pd.to_datetime(df['Date'])
     
+    # Set Date as index and ensure it's in datetime format
+    df.set_index('Date', inplace=True)
+    # Explicitly convert index to datetime format for time series operations
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    
+    # Validate that the index is in correct datetime format
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise TypeError("DataFrame index is not in datetime format. Time series operations cannot be performed.")
+    
     # Filter data as per requirements
     df = df[(df['Sales'] > 0) & (df['Open'] == 1)]
     
@@ -57,19 +67,28 @@ def load_data():
 
 # Feature engineering
 def engineer_features(df):
+    # Optimize data types before feature engineering
+    for col in df.select_dtypes(include=['int64']).columns:
+        df[col] = pd.to_numeric(df[col], downcast='integer')
+    for col in df.select_dtypes(include=['float64']).columns:
+        df[col] = pd.to_numeric(df[col], downcast='float')
+    
+    # Apply log transform to the target variable
+    df['Sales_log'] = np.log1p(df['Sales'])
+    
     # Temporal features
-    df['Year'] = df['Date'].dt.year
-    df['Month'] = df['Date'].dt.month
-    df['Day'] = df['Date'].dt.day
-    df['DayOfWeek'] = df['Date'].dt.dayofweek
-    df['WeekOfYear'] = df['Date'].dt.isocalendar().week
-    df['Quarter'] = df['Date'].dt.quarter
+    df['Year'] = df.index.year.astype('int16')
+    df['Month'] = df.index.month.astype('int8')
+    df['Day'] = df.index.day.astype('int8')
+    df['DayOfWeek'] = df.index.dayofweek.astype('int8')
+    df['WeekOfYear'] = df.index.isocalendar().week.astype('int8')
+    df['Quarter'] = df.index.quarter.astype('int8')
     
     # Cyclical encoding
-    df['DayOfWeek_sin'] = np.sin(2 * np.pi * df['DayOfWeek']/7)
-    df['DayOfWeek_cos'] = np.cos(2 * np.pi * df['DayOfWeek']/7)
-    df['Month_sin'] = np.sin(2 * np.pi * df['Month']/12)
-    df['Month_cos'] = np.cos(2 * np.pi * df['Month']/12)
+    df['DayOfWeek_sin'] = np.sin(2 * np.pi * df['DayOfWeek']/7).astype('float32')
+    df['DayOfWeek_cos'] = np.cos(2 * np.pi * df['DayOfWeek']/7).astype('float32')
+    df['Month_sin'] = np.sin(2 * np.pi * df['Month']/12).astype('float32')
+    df['Month_cos'] = np.cos(2 * np.pi * df['Month']/12).astype('float32')
     
     # Competition features
     df['CompetitionDistance'].fillna(df['CompetitionDistance'].median(), inplace=True)
@@ -87,7 +106,7 @@ def engineer_features(df):
         df['CompetitionOpenSinceMonth'].astype(str) + '-01',
         errors='coerce'
     )
-    df['DaysSinceCompetitionOpen'] = (df['Date'] - df['CompetitionOpenSince']).dt.days
+    df['DaysSinceCompetitionOpen'] = (df.index - df['CompetitionOpenSince']).dt.days
     df['DaysSinceCompetitionOpen'] = df['DaysSinceCompetitionOpen'].fillna(0)
     df['DaysSinceCompetitionOpen'] = df['DaysSinceCompetitionOpen'].apply(lambda x: 0 if x < 0 else x)
     
@@ -100,7 +119,7 @@ def engineer_features(df):
             (df['Year'] > df['Promo2SinceYear']) | 
             ((df['Year'] == df['Promo2SinceYear']) & (df['WeekOfYear'] >= df['Promo2SinceWeek']))
         )
-    ).astype(int)
+    ).astype('int8')
     
     # For date calculation, use the first day of the Promo2SinceYear as a safe approximation
     # when Promo2SinceWeek is missing or zero
@@ -115,7 +134,7 @@ def engineer_features(df):
         df.loc[has_week_info, 'Promo2SinceYear'].astype(int).astype(str) + '-01-01'
     ) + pd.to_timedelta((df.loc[has_week_info, 'Promo2SinceWeek'] - 1) * 7, unit='days')
     
-    df['DaysSincePromo2Start'] = (df['Date'] - df['Promo2Start']).dt.days
+    df['DaysSincePromo2Start'] = (df.index - df['Promo2Start']).dt.days
     df['DaysSincePromo2Start'] = df['DaysSincePromo2Start'].fillna(0)
     df['DaysSincePromo2Start'] = df['DaysSincePromo2Start'].apply(lambda x: 0 if x < 0 else x)
     
@@ -123,39 +142,46 @@ def engineer_features(df):
     month_map = {1:'Jan', 2:'Feb', 3:'Mar', 4:'Apr', 5:'May', 6:'Jun',
                  7:'Jul', 8:'Aug', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dec'}
     df['MonthStr'] = df['Month'].map(month_map)
-    df['IsPromoMonth'] = df.apply(lambda row: 1 if row['PromoInterval'] != 'None' and row['MonthStr'] in row['PromoInterval'] else 0, axis=1)
+    df['IsPromoMonth'] = df.apply(lambda row: 1 if row['PromoInterval'] != 'None' and row['MonthStr'] in row['PromoInterval'] else 0, axis=1).astype('int8')
     
     # Sort by Store and Date for lag features
     df.sort_values(['Store', 'Date'], inplace=True)
     
-    # Lag features
-    lag_days = [1, 7, 14]
+    # Extended lag features for sales
+    lag_days = [1, 2, 3, 5, 7, 14, 21, 28]
     for lag in lag_days:
-        df[f'Sales_lag_{lag}'] = df.groupby('Store')['Sales'].shift(lag)
-        df[f'Customers_lag_{lag}'] = df.groupby('Store')['Customers'].shift(lag)
+        df[f'Sales_lag_{lag}'] = df.groupby('Store')['Sales'].shift(lag).astype('float32')
+        df[f'Customers_lag_{lag}'] = df.groupby('Store')['Customers'].shift(lag).astype('float32')
     
-    # Rolling features
-    windows = [7, 30]
+    # Rolling features with multiple windows
+    windows = [3, 7, 14, 30, 60, 90]
     for window in windows:
         df[f'Sales_rolling_mean_{window}'] = df.groupby('Store')['Sales'].transform(
             lambda x: x.rolling(window, min_periods=1).mean()
-        )
+        ).astype('float32')
         df[f'Sales_rolling_std_{window}'] = df.groupby('Store')['Sales'].transform(
             lambda x: x.rolling(window, min_periods=1).std()
-        )
+        ).astype('float32')
         df[f'Customers_rolling_mean_{window}'] = df.groupby('Store')['Customers'].transform(
             lambda x: x.rolling(window, min_periods=1).mean()
-        )
+        ).astype('float32')
+    
+    # Exponential weighted moving averages
+    ewm_spans = [7, 14, 30]
+    for span in ewm_spans:
+        df[f'Sales_ewm_mean_{span}'] = df.groupby('Store')['Sales'].transform(
+            lambda x: x.ewm(span=span, min_periods=1).mean()
+        ).astype('float32')
     
     # Mean encoding
     store_mean_sales = df.groupby('Store')['Sales'].mean()
-    df['Store_mean_sales'] = df['Store'].map(store_mean_sales)
+    df['Store_mean_sales'] = df['Store'].map(store_mean_sales).astype('float32')
     
     dayofweek_mean_sales = df.groupby('DayOfWeek')['Sales'].mean()
-    df['DayOfWeek_mean_sales'] = df['DayOfWeek'].map(dayofweek_mean_sales)
+    df['DayOfWeek_mean_sales'] = df['DayOfWeek'].map(dayofweek_mean_sales).astype('float32')
     
     month_mean_sales = df.groupby('Month')['Sales'].mean()
-    df['Month_mean_sales'] = df['Month'].map(month_mean_sales)
+    df['Month_mean_sales'] = df['Month'].map(month_mean_sales).astype('float32')
     
     # Fill NaN values created by lag features
     df.fillna(0, inplace=True)
@@ -185,11 +211,20 @@ def prepare_data(df):
         'Year', 'Month', 'Day', 'WeekOfYear', 'Quarter',
         'DayOfWeek_sin', 'DayOfWeek_cos', 'Month_sin', 'Month_cos',
         'DaysSinceCompetitionOpen', 'DaysSincePromo2Start', 'IsPromoMonth',
-        'Sales_lag_1', 'Sales_lag_7', 'Sales_lag_14',
-        'Customers_lag_1', 'Customers_lag_7', 'Customers_lag_14',
+        'Sales_lag_1', 'Sales_lag_2', 'Sales_lag_3', 'Sales_lag_5', 
+        'Sales_lag_7', 'Sales_lag_14', 'Sales_lag_21', 'Sales_lag_28',
+        'Customers_lag_1', 'Customers_lag_2', 'Customers_lag_3', 'Customers_lag_5',
+        'Customers_lag_7', 'Customers_lag_14', 'Customers_lag_21', 'Customers_lag_28',
+        'Sales_rolling_mean_3', 'Sales_rolling_std_3',
         'Sales_rolling_mean_7', 'Sales_rolling_std_7',
+        'Sales_rolling_mean_14', 'Sales_rolling_std_14',
         'Sales_rolling_mean_30', 'Sales_rolling_std_30',
-        'Customers_rolling_mean_7', 'Customers_rolling_mean_30',
+        'Sales_rolling_mean_60', 'Sales_rolling_std_60',
+        'Sales_rolling_mean_90', 'Sales_rolling_std_90',
+        'Customers_rolling_mean_3', 'Customers_rolling_mean_7',
+        'Customers_rolling_mean_14', 'Customers_rolling_mean_30',
+        'Customers_rolling_mean_60', 'Customers_rolling_mean_90',
+        'Sales_ewm_mean_7', 'Sales_ewm_mean_14', 'Sales_ewm_mean_30',
         'Store_mean_sales', 'DayOfWeek_mean_sales', 'Month_mean_sales'
     ]
     
@@ -197,7 +232,7 @@ def prepare_data(df):
     feature_cols = [col for col in feature_cols if col in df.columns]
     
     X = df[feature_cols]
-    y = df['Sales']
+    y = df['Sales_log']  # Use log-transformed target
     
     return X, y, feature_cols
 
@@ -205,11 +240,20 @@ def prepare_data(df):
 def train_and_evaluate(X, y):
     # Time series split (last 6 weeks for validation)
     split_date = X.index.max() - pd.Timedelta(weeks=6)
-    train_idx = X[X.index <= split_date].index
-    val_idx = X[X.index > split_date].index
     
-    X_train, X_val = X.loc[train_idx], X.loc[val_idx]
-    y_train, y_val = y.loc[train_idx], y.loc[val_idx]
+    # Use integer positions instead of boolean indexing to reduce memory usage
+    train_mask = X.index <= split_date
+    val_mask = X.index > split_date
+    
+    # Get integer positions
+    train_positions = np.where(train_mask)[0]
+    val_positions = np.where(val_mask)[0]
+    
+    # Use iloc for memory-efficient splitting
+    X_train = X.iloc[train_positions]
+    X_val = X.iloc[val_positions]
+    y_train = y.iloc[train_positions]
+    y_val = y.iloc[val_positions]
     
     # Scale features
     scaler = StandardScaler()
@@ -254,7 +298,11 @@ def train_and_evaluate(X, y):
             model.fit(X_train_scaled, y_train)
             preds = model.predict(X_val_scaled)
         
-        mape = safe_mape(y_val, preds)
+        # Transform predictions back to original scale
+        preds_original = np.expm1(preds)
+        y_val_original = np.expm1(y_val)
+        
+        mape = safe_mape(y_val_original, preds_original)
         results[name] = mape
         print(f"{name} MAPE: {mape:.4f}")
     
@@ -275,8 +323,12 @@ def train_and_evaluate(X, y):
         best_model.fit(X_train_scaled, y_train)
         final_preds = best_model.predict(X_val_scaled)
     
+    # Transform predictions back to original scale for final evaluation
+    final_preds_original = np.expm1(final_preds)
+    y_val_original = np.expm1(y_val)
+    
     # Calculate final MAPE
-    final_mape = safe_mape(y_val, final_preds)
+    final_mape = safe_mape(y_val_original, final_preds_original)
     
     # Feature importance
     if hasattr(best_model, 'feature_importances_'):

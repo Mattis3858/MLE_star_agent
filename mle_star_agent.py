@@ -18,7 +18,14 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 load_dotenv()
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
-MAX_ITERATIONS = 15
+MAX_ITERATIONS = 20
+
+# Output directories (keep the repo root clean across runs)
+OUTPUT_DIR = "outputs"  # final_best_model.py, analysis_report.md, plots, model dumps
+ITER_DIR = "train_iter"  # per-iteration training scripts
+LOG_DIR = "logs"  # per-iteration execution + planner logs
+for _d in (OUTPUT_DIR, ITER_DIR, LOG_DIR):
+    os.makedirs(_d, exist_ok=True)
 
 ollama_cloud_headers = {"Authorization": f"Bearer {os.environ.get('OLLAMA_API_KEY')}"}
 
@@ -83,7 +90,7 @@ def search_node(state: AgentState):
 
     task_desc = state.get("task_description", "Kaggle Rossmann Store Sales forecasting")
 
-    arxiv_tool = ArxivAPIWrapper(top_k_results=3, doc_content_chars_max=2000)
+    arxiv_tool = ArxivAPIWrapper(top_k_results=2, doc_content_chars_max=2000)
 
     tavily_tool = None
     if TAVILY_API_KEY:
@@ -95,20 +102,20 @@ def search_node(state: AgentState):
     print(">> Fetching core Google paper (arxiv:2506.15692)...")
     try:
         core_paper_text = arxiv_tool.run("2506.15692")
-        results_text += (
-            "\n--- Core Paper (Google 2506.15692) ---\n" + core_paper_text + "\n"
-        )
+        # results_text += (
+        #     "\n--- Core Paper (Google 2506.15692) ---\n" + core_paper_text + "\n"
+        # )
     except Exception as e:
         print(f"Core paper fetch failed: {e}")
 
-    print(">> Searching Arxiv for additional academic context...")
-    try:
-        arxiv_result = arxiv_tool.run(
-            "machine learning time series forecasting entity embeddings Rossmann"
-        )
-        results_text += f"\n--- Additional Arxiv Papers ---\n{arxiv_result}\n"
-    except Exception as e:
-        print(f"Arxiv search failed: {e}")
+    # print(">> Searching Arxiv for additional academic context...")
+    # try:
+    #     arxiv_result = arxiv_tool.run(
+    #         "machine learning time series forecasting entity embeddings Rossmann"
+    #     )
+    #     results_text += f"\n--- Additional Arxiv Papers ---\n{arxiv_result}\n"
+    # except Exception as e:
+    #     print(f"Arxiv search failed: {e}")
 
     if tavily_tool is not None:
         print(">> Searching Web (Tavily) for Kaggle solutions...")
@@ -142,7 +149,7 @@ Other Search Data:
 {results_text}
 
 Task:
-1. Extract 6 key references (paper titles, Kaggle solutions, or method names) that we should implement.
+1. Extract 5 key references (paper titles, Kaggle solutions, or method names) that we should implement.
 2. One of the references MUST explicitly be "MLE-STAR: Machine Learning Engineering Agent via Search and Targeted Refinement(arxiv:2506.15692)".
 3. Focus on:
    - High-Impact Feature Engineering (date parts, lag features, store embeddings, promo effects)
@@ -181,9 +188,6 @@ The design should include sections for:
    - Filtering out closed stores and zero-sales days if appropriate
 
 2. Feature Engineering
-   - Calendar / date features (e.g., year, month, week, day-of-week, promo periods)
-   - Store-level features (e.g., store type, competition distance, competition open date)
-   - Promotion / holiday related features
    - Any agentic or automated ideas inspired by the Kaggle solutions or citations
 
 3. Model Selection
@@ -278,7 +282,11 @@ Design Spec:
 
 7. OUTPUT & PLOTTING:
    - If you generate plots, call `import matplotlib.pyplot as plt` and use `plt.switch_backend('Agg')` at the top to avoid GUI issues.
-   - You may optionally save a few key plots (e.g. feature importance) to disk.
+   - Save ALL artifacts (plots, model dumps, etc.) into the 'outputs' directory, e.g.
+       import os
+       os.makedirs('outputs', exist_ok=True)
+       plt.savefig('outputs/feature_importance.png')
+     Do NOT write artifacts to the current working directory root.
    
 8. PERFORMANCE & VECTORIZATION (MANDATORY):
    - STRICTLY FORBIDDEN: Do NOT use `iterrows()`, `itertuples()`, or python `for` loops to iterate over DataFrame rows. These are too slow for 1M+ rows.
@@ -312,7 +320,7 @@ def refinement_node(state: AgentState):
     )
 
     current_code = state["code"]
-    filename = f"train_iter_{current_iteration}.py"
+    filename = os.path.join(ITER_DIR, f"train_iter_{current_iteration}.py")
     with open(filename, "w", encoding="utf-8") as f:
         f.write(current_code)
 
@@ -326,8 +334,7 @@ def refinement_node(state: AgentState):
         )
         output = result.stdout + "\n" + result.stderr
 
-        os.makedirs("logs", exist_ok=True)
-        log_path = os.path.join("logs", f"iter_{current_iteration}.log")
+        log_path = os.path.join(LOG_DIR, f"iter_{current_iteration}.log")
 
         global_citations = state.get("citations", [])
 
@@ -493,7 +500,7 @@ Output strictly in JSON:
     history[-1]["citation"] = plan_data["citation"]
     history[-1]["reasoning"] = plan_data["reasoning"]
     try:
-        log_path = os.path.join("logs", f"iter_{current_iteration}.log")
+        log_path = os.path.join(LOG_DIR, f"iter_{current_iteration}.log")
         with open(log_path, "a", encoding="utf-8") as f:
             f.write("\n\n" + "=" * 40 + "\n")
             f.write("=== [Planner Agent] Refinement Strategy ===\n")
@@ -533,6 +540,9 @@ REASON: {plan_data['reasoning']}
   even if some targets are zero (e.g., use a safe denominator like `y_true_safe = np.where(y_true == 0, 1, y_true)`).
 - Ensure the script prints the final validation metric as:
     print(f"FINAL_MAPE: {{final_mape}}")
+- Save any artifacts (plots, model dumps) into the 'outputs' directory
+  (e.g. `outputs/feature_importance.png`), creating it with
+  `os.makedirs('outputs', exist_ok=True)`. Do NOT write artifacts to the root.
 
 Output ONLY the full Python code. Do NOT wrap it in markdown fences.
 """
@@ -691,10 +701,15 @@ if __name__ == "__main__":
         }
         result = app.invoke(initial_state)
 
-        with open("final_best_model.py", "w", encoding="utf-8") as f:
+        best_model_path = os.path.join(OUTPUT_DIR, "final_best_model.py")
+        report_path = os.path.join(OUTPUT_DIR, "analysis_report.md")
+
+        with open(best_model_path, "w", encoding="utf-8") as f:
             f.write(result["best_code"])
 
-        with open("analysis_report.md", "w", encoding="utf-8") as f:
+        with open(report_path, "w", encoding="utf-8") as f:
             f.write(result["report"])
 
         print(f"Done. Best MAPE: {result['best_mape']}")
+        print(f"Best model -> {best_model_path}")
+        print(f"Report     -> {report_path}")
