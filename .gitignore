@@ -16,3 +16,6 @@ train.csv
 # Runtime artifacts (regenerated each run)
 catboost_info/
 logs/
+outputs/cache/
+train_iter/
+learned_lessons.md

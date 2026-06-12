@@ -1,5 +1,15 @@
 # MLE-STAR: Autonomous Machine Learning Optimization Agent
 ## 針對 Rossmann Store Sales 預測任務的自動化機器學習 AI Agent 系統
+
+> ## ⚡ v2.0 重構說明
+> 本專案已依據 `REFACTOR_PLAN.md` 完成大規模重構，由單一腳本改為 `mle_star/` 套件。核心改變：
+>
+> 1. **誠實評估 (Honest Evaluation)**：v1 由 LLM 自行撰寫切分與評分程式，導致驗證 MAPE 可被洩漏至 <1%（不可信）。v2 改為 **Harness 擁有資料、切分與評分**——LLM 只撰寫 `build_pipeline()`（未擬合的 sklearn Pipeline），由 Harness 負責 fit/predict/score。所有時序特徵（lag/rolling）皆以 ≥42 天位移計算，並新增**只評分一次的 test set**（最後 42 天）防止 adaptive overfitting。
+> 2. **搜尋智慧**：Solution-tree beam search（可從任一 frontier 節點分支）、策略黑名單、Ablation 證據驅動的 Planner、Optuna 數值調參（LLM 只負責結構）、Top-K Ensemble。
+> 3. **強健性**：專職 Debug 自我修復迴圈、確定性（固定 seed，同 seed 分數完全一致）、雜訊門檻（改善需超過 noise floor 才算數）、checkpoint/`--resume`、token/時間預算控管。
+>
+> **誠實基準**：Baseline 在 holdout 上約 **MAPE 8.2% / RMSPE 10.9%**。執行方式：`python -m mle_star`（測試：`python test/test_system.py`，無需 LLM 金鑰）。以下章節描述 v1 之原始設計，保留作為歷史脈絡。
+
 ### 1. 專案概述 (Overview): 
 MLE-STAR (Machine Learning Engineering Agent via Search and Targeted Refinement) 旨在全自動化機器學習流程。
 
