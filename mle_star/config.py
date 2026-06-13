@@ -63,8 +63,8 @@ TOKEN_BUDGET = int(os.getenv("MLE_STAR_TOKEN_BUDGET", "2000000"))
 WALL_CLOCK_BUDGET_S = int(os.getenv("MLE_STAR_WALL_BUDGET_S", str(6 * 3600)))
 
 # --- LLM ---
-REASONER_MODEL = "deepseek-v3.1:671b-cloud"
-CODER_MODEL = "qwen3-coder:480b-cloud"
+REASONER_MODEL = "qwen3-coder-next:cloud"
+CODER_MODEL = "gemma4:31b-cloud"
 OLLAMA_BASE_URL = "https://ollama.com"
 
 

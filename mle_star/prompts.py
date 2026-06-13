@@ -31,9 +31,21 @@ Hard rules:
   pipeline MUST encode them (e.g. OrdinalEncoder/OneHotEncoder inside a
   ColumnTransformer with remainder="passthrough").
 - Some numeric columns contain NaN (early-history lags). Tree models like
-  LightGBM/XGBoost/HistGradientBoosting handle NaN natively; if you use a
-  model that does not, impute inside the pipeline.
+  LightGBM/XGBoost/CatBoost/HistGradientBoosting handle NaN natively; if you
+  use a model that does not, impute inside the pipeline.
 - Allowed libraries: sklearn, xgboost, lightgbm, catboost, numpy, pandas.
+- GPU IS AVAILABLE and STRONGLY PREFERRED for this large tabular task (~3 GB
+  free VRAM on an NVIDIA GPU). Gradient-boosted trees are the expected winners
+  here. Use these EXACT GPU settings - each is verified to work on this machine:
+    * XGBoost:  XGBRegressor(tree_method="hist", device="cuda", ...)
+    * LightGBM: LGBMRegressor(device="gpu", max_bin=255, ...)
+                # MUST be device="gpu" (OpenCL). device="cuda" is NOT compiled
+                # into this build and will fail.
+    * CatBoost: CatBoostRegressor(task_type="GPU", devices="0", verbose=0, ...)
+  The harness fixes the random seed for you - do not set it. Keep the model
+  within ~3 GB VRAM (avoid extreme n_estimators/depth combos); a GPU
+  out-of-memory error fails the candidate. sklearn HistGradientBoostingRegressor
+  (CPU) is a fast, reliable fallback if a GPU model misbehaves.
 - Output ONLY the Python module. No markdown fences, no commentary.
 '''
 

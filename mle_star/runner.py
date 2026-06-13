@@ -66,9 +66,13 @@ def make_estimator(mod, feature_columns, categorical_columns, seed: int):
 
     pipe = mod.build_pipeline(feature_columns, categorical_columns)
     # Force determinism on the final estimator regardless of what the LLM set.
+    # xgboost/lightgbm expose random_state; catboost uses random_seed and does
+    # not list it in get_params() until set, so key off the class name.
     final = pipe.steps[-1][1]
     if "random_state" in final.get_params():
         final.set_params(random_state=seed)
+    elif final.__class__.__name__.startswith("CatBoost"):
+        final.set_params(random_seed=seed)
 
     if getattr(mod, "USE_LOG_TARGET", False):
         return TransformedTargetRegressor(
